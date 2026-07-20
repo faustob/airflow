@@ -15,26 +15,3 @@
 # specific language governing permissions and limitations
 # under the License.
 from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
-from airflow.sdk._shared.observability.metrics import datadog_logger
-from airflow.sdk.configuration import conf
-
-if TYPE_CHECKING:
-    from airflow.sdk._shared.observability.metrics.datadog_logger import SafeDogStatsdLogger
-
-
-def get_dogstatsd_logger() -> SafeDogStatsdLogger:
-    return datadog_logger.get_dogstatsd_logger(
-        tags_in_string=conf.get("metrics", "statsd_datadog_tags"),
-        host=conf.get("metrics", "statsd_host"),
-        port=conf.getint("metrics", "statsd_port"),
-        namespace=conf.get("metrics", "statsd_prefix"),
-        datadog_metrics_tags=conf.getboolean("metrics", "statsd_datadog_metrics_tags", fallback=True),
-        statsd_disabled_tags=conf.get("metrics", "statsd_disabled_tags", fallback=None),
-        metrics_allow_list=conf.get("metrics", "metrics_allow_list", fallback=None),
-        metrics_block_list=conf.get("metrics", "metrics_block_list", fallback=None),
-        stat_name_handler=conf.getimport("metrics", "stat_name_handler"),
-        statsd_influxdb_enabled=conf.getboolean("metrics", "statsd_influxdb_enabled", fallback=False),
-    )
