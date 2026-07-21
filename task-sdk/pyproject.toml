@@ -102,10 +102,7 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.27.0",
     "opentelemetry-proto<9999,>=1.27.0",
 ]
-"statsd" = [
-    "statsd>=3.3.0",
-]
-"all" = ["apache-airflow-task-sdk[sentry,otel,statsd]"]
+"all" = ["apache-airflow-task-sdk[sentry,otel]"]
 
 [project.urls]
 "Bug Tracker" = "https://github.com/apache/airflow/issues"
