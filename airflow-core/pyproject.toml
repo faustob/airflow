@@ -125,7 +125,6 @@ dependencies = [
     # This may be removed when future versions of pip are able
     # to handle this dependency resolution automatically.
     "opentelemetry-proto<9999,>=1.27.0",
-    "opentelemetry-sdk>=1.27.0",
     "packaging>=25.0",
     "pathspec>=0.9.0",
     'pendulum>=3.1.0',
@@ -202,8 +201,11 @@ dependencies = [
 "otel" = [
     "opentelemetry-exporter-prometheus>=0.47b0",
 ]
+"statsd" = [
+    "statsd>=3.3.0",
+]
 "all" = [
-    "apache-airflow-core[graphviz,gunicorn,kerberos,otel]"
+    "apache-airflow-core[graphviz,gunicorn,kerberos,otel,statsd]"
 ]
 
 [project.scripts]
