@@ -19,40 +19,25 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from airflow._shared.configuration import AirflowConfigException
-from airflow._shared.observability.metrics import statsd_logger
+from airflow._shared.observability.metrics import otel_compat_logger
 from airflow.configuration import conf
 
 if TYPE_CHECKING:
-    from airflow._shared.observability.metrics.statsd_logger import SafeStatsdLogger
+    from airflow._shared.observability.metrics.otel_compat_logger import OtelCompatStatsdLogger
 
 log = logging.getLogger(__name__)
 
 
-def get_statsd_logger() -> SafeStatsdLogger:
-    stats_class = conf.getimport("metrics", "statsd_custom_client_path", fallback=None)
+def get_statsd_logger() -> OtelCompatStatsdLogger:
+    """Return a StatsD-shaped logger that emits metrics through OpenTelemetry.
 
-    # no need to check for the scheduler/statsd_on -> this method is only called when it is set
-    # and previously it would crash with None is callable if it was called without it.
-    from statsd import StatsClient
-
-    if stats_class:
-        if not issubclass(stats_class, StatsClient):
-            raise AirflowConfigException(
-                "Your custom StatsD client must extend the statsd.StatsClient in order to ensure "
-                "backwards compatibility."
-            )
-        log.info("Successfully loaded custom StatsD client")
-
-    else:
-        stats_class = StatsClient
-
-    return statsd_logger.get_statsd_logger(
-        stats_class=stats_class,
-        host=conf.get("metrics", "statsd_host"),
-        port=conf.getint("metrics", "statsd_port"),
+    This preserves the `statsd_on`-driven wiring path and configuration keys while
+    routing every counter/gauge/timer through the OTel metrics API instead of a
+    StatsD/UDP client. Metric names are kept verbatim (including the configured
+    `statsd_prefix`) for continuity with existing dashboards.
+    """
+    return otel_compat_logger.get_otel_compat_statsd_logger(
         prefix=conf.get("metrics", "statsd_prefix"),
-        ipv6=conf.getboolean("metrics", "statsd_ipv6", fallback=False),
         influxdb_tags_enabled=conf.getboolean("metrics", "statsd_influxdb_enabled", fallback=False),
         statsd_disabled_tags=conf.get("metrics", "statsd_disabled_tags", fallback=None),
         metrics_allow_list=conf.get("metrics", "metrics_allow_list", fallback=None),
