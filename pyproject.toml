@@ -206,9 +206,6 @@ apache-airflow = "airflow.__main__:main"
 "databricks" = [
     "apache-airflow-providers-databricks>=6.11.0"
 ]
-"datadog" = [
-    "apache-airflow-providers-datadog>=3.8.0"
-]
 "dbt.cloud" = [
     "apache-airflow-providers-dbt-cloud>=3.11.0"
 ]
@@ -449,7 +446,6 @@ apache-airflow = "airflow.__main__:main"
     "apache-airflow-providers-common-messaging>=2.0.0", # Set from MIN_VERSION_OVERRIDE in update_airflow_pyproject_toml.py
     "apache-airflow-providers-common-sql>=1.18.0",
     "apache-airflow-providers-databricks>=6.11.0",
-    "apache-airflow-providers-datadog>=3.8.0",
     "apache-airflow-providers-dbt-cloud>=3.11.0",
     "apache-airflow-providers-dingding>=3.7.0",
     "apache-airflow-providers-discord>=3.9.0",
