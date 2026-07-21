@@ -28,9 +28,11 @@ vendor client concatenated `prefix.stat` onto the wire and callers relied on tha
 name appearing on dashboards). We reproduce that same concatenation here.
 
 Instrument selection:
-  * `incr`/`decr` -> a single `UpDownCounter` per stat name (created once, cached), since
-    the original vendor semantics allow the value to move in both directions via the same
-    named stat (`incr` and `decr` on the same stat name).
+  * `incr` -> a monotonic `Counter` per stat name (StatsD counters are cumulative counts
+    and dashboards aggregate them monotonically), EXCEPT stats listed in `UP_DOWN_STATS`
+    (the ones the estate actually `decr`s), which use a single `UpDownCounter` for both
+    `incr` and `decr` so contributions net on one instrument. This mirrors the repo's own
+    OTel backend (`otel_logger.UP_DOWN_COUNTERS`).
   * `gauge` -> a synchronous `Gauge` (`meter.create_gauge`) since this OTel target version
     (>=1.27.0 API surface with SDK >=1.27.0) supports synchronous gauges via
     `Meter.create_gauge`. Each `gauge()` call directly records the current value, matching
@@ -46,6 +48,7 @@ rather than per call, per the contract.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import time
 from collections.abc import Callable
@@ -72,17 +75,29 @@ log = logging.getLogger(__name__)
 
 _meter = otel_metrics.get_meter("airflow.observability.statsd_compat")
 
-_updown_counters: dict[str, otel_metrics.UpDownCounter] = {}
+# Stats that legitimately move in both directions: `incr` AND `decr` are called on them,
+# so both must land on ONE UpDownCounter to net correctly. Keyed by the UNPREFIXED stat
+# name (instrument selection happens before the configured `statsd_prefix` is applied, so
+# a non-default prefix cannot break netting). Mirrors `otel_logger.UP_DOWN_COUNTERS`
+# (kept local: that module imports the OTel SDK, this one stays API-only). Every current
+# `decr` call site in the codebase targets dag_processing.processes; a stat that gains a
+# `decr` caller later must be added here or its decrements are dropped with a warning.
+UP_DOWN_STATS = {"dag_processing.processes"}
+
+_counters: dict[str, otel_metrics.Counter | otel_metrics.UpDownCounter] = {}
 _gauges: dict[str, otel_metrics.Gauge] = {}
 _histograms: dict[str, otel_metrics.Histogram] = {}
 _gauge_last_values: dict[tuple, float] = {}
 
 
-def _get_updown_counter(stat: str) -> otel_metrics.UpDownCounter:
-    counter = _updown_counters.get(stat)
+def _get_counter(full_stat: str, updown: bool) -> otel_metrics.Counter | otel_metrics.UpDownCounter:
+    counter = _counters.get(full_stat)
     if counter is None:
-        counter = _meter.create_up_down_counter(name=stat)
-        _updown_counters[stat] = counter
+        if updown:
+            counter = _meter.create_up_down_counter(name=full_stat)
+        else:
+            counter = _meter.create_counter(name=full_stat)
+        _counters[full_stat] = counter
     return counter
 
 
@@ -169,8 +184,18 @@ class OtelCompatStatsdLogger:
         if self.metrics_validator.test(stat):
             if rate < 1 and __import__("random").random() > rate:
                 return None
-            full_stat = self._full_stat(stat)
-            _get_updown_counter(full_stat).add(count, attributes=tags or {})
+            updown = stat in UP_DOWN_STATS
+            if count < 0 and not updown:
+                # A negative add on a monotonic Counter is rejected by the OTel API
+                # (same outcome as the repo's own otel_logger backend).
+                log.warning(
+                    "Dropping negative incr(%s, %s): stat is a monotonic Counter; "
+                    "add it to UP_DOWN_STATS if it should net with decrements.",
+                    stat,
+                    count,
+                )
+                return None
+            _get_counter(self._full_stat(stat), updown).add(count, attributes=tags or {})
         return None
 
     @prepare_stat_with_tags
@@ -187,8 +212,17 @@ class OtelCompatStatsdLogger:
         if self.metrics_validator.test(stat):
             if rate < 1 and __import__("random").random() > rate:
                 return None
-            full_stat = self._full_stat(stat)
-            _get_updown_counter(full_stat).add(-count, attributes=tags or {})
+            if stat not in UP_DOWN_STATS:
+                # Routing this through a second instrument type under the same name
+                # would split incr/decr contributions that can never net. Surface it
+                # loudly instead: the fix is one line in UP_DOWN_STATS.
+                log.warning(
+                    "Dropping decr(%s): stat is not in UP_DOWN_STATS, so its incr side "
+                    "uses a monotonic Counter; add it to UP_DOWN_STATS to net properly.",
+                    stat,
+                )
+                return None
+            _get_counter(self._full_stat(stat), True).add(-count, attributes=tags or {})
         return None
 
     @prepare_stat_with_tags
@@ -227,7 +261,13 @@ class OtelCompatStatsdLogger:
         """Stats timing."""
         if self.metrics_validator.test(stat):
             full_stat = self._full_stat(stat)
-            value_ms = dt.total_seconds() * 1000 if hasattr(dt, "total_seconds") else float(dt)
+            # Vendor-parity units: the statsd client treats numeric input as
+            # milliseconds already and converts timedelta to ms — the identical
+            # branch lives in the repo's own otel_logger.timing.
+            if isinstance(dt, datetime.timedelta):
+                value_ms = dt.total_seconds() * 1000.0
+            else:
+                value_ms = float(dt)
             _get_histogram(full_stat).record(value_ms, attributes=tags or {})
         return None
 
