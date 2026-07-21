@@ -19,7 +19,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from airflow.sdk._shared.configuration import AirflowConfigException
 from airflow.sdk._shared.observability.metrics import statsd_logger
 from airflow.sdk.configuration import conf
 
@@ -30,25 +29,12 @@ log = logging.getLogger(__name__)
 
 
 def get_statsd_logger() -> SafeStatsdLogger:
-    stats_class = conf.getimport("metrics", "statsd_custom_client_path", fallback=None)
-
-    # no need to check for the scheduler/statsd_on -> this method is only called when it is set
-    # and previously it would crash with None is callable if it was called without it.
-    from statsd import StatsClient
-
-    if stats_class:
-        if not issubclass(stats_class, StatsClient):
-            raise AirflowConfigException(
-                "Your custom StatsD client must extend the statsd.StatsClient in order to ensure "
-                "backwards compatibility."
-            )
-        log.info("Successfully loaded custom StatsD client")
-
-    else:
-        stats_class = StatsClient
+    # The statsd_custom_client_path / statsd.StatsClient subclass requirement no longer
+    # applies: the backend is now OpenTelemetry metrics, so any custom client path
+    # configuration is ignored here (kept as a no-op read for config compatibility).
+    conf.getimport("metrics", "statsd_custom_client_path", fallback=None)
 
     return statsd_logger.get_statsd_logger(
-        stats_class=stats_class,
         host=conf.get("metrics", "statsd_host"),
         port=conf.getint("metrics", "statsd_port"),
         prefix=conf.get("metrics", "statsd_prefix"),

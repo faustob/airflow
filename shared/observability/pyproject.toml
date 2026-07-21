@@ -25,6 +25,7 @@ classifiers = [
 
 dependencies = [
     "opentelemetry-api>=1.27.0",
+    "opentelemetry-sdk>=1.27.0",
     "pendulum>=3.1.0",
     "structlog>=25.4.0",
     "methodtools>=0.4.7",
@@ -35,13 +36,10 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.27.0",
     "opentelemetry-proto<9999,>=1.27.0",
 ]
-"statsd" = [
-    "statsd>=3.3.0",
-]
 "datadog" = [
     "datadog>=0.50.0",
 ]
-"all" = ["apache-airflow-shared-observability[otel,statsd,datadog]"]
+"all" = ["apache-airflow-shared-observability[otel,datadog]"]
 
 [dependency-groups]
 dev = [
