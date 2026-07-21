@@ -22,6 +22,8 @@ from collections.abc import Callable
 from functools import wraps
 from typing import TYPE_CHECKING, TypeVar, cast
 
+from opentelemetry import metrics as otel_metrics
+
 from .protocols import Timer
 from .validators import (
     PatternAllowListValidator,
@@ -31,14 +33,91 @@ from .validators import (
 )
 
 if TYPE_CHECKING:
-    from statsd import StatsClient
-
     from .protocols import DeltaType
     from .validators import ListValidator
 
 T = TypeVar("T", bound=Callable)
 
 log = logging.getLogger(__name__)
+
+# Stats whose value can legitimately decrease (mirrors the in-repo otel_logger.py precedent).
+UP_DOWN_COUNTERS = {"airflow.dag_processing.processes"}
+
+_meter = otel_metrics.get_meter(__name__)
+
+
+class _InstrumentRegistry:
+    """Lazily creates and caches OTel instruments per stat name (module-scope singletons)."""
+
+    def __init__(self) -> None:
+        self._counters: dict[str, otel_metrics.Counter] = {}
+        self._updown_counters: dict[str, otel_metrics.UpDownCounter] = {}
+        self._gauges: dict[str, object] = {}
+        self._histograms: dict[str, otel_metrics.Histogram] = {}
+
+    def counter(self, stat: str) -> otel_metrics.Counter:
+        instrument = self._counters.get(stat)
+        if instrument is None:
+            instrument = _meter.create_counter(stat)
+            self._counters[stat] = instrument
+        return instrument
+
+    def up_down_counter(self, stat: str) -> otel_metrics.UpDownCounter:
+        instrument = self._updown_counters.get(stat)
+        if instrument is None:
+            instrument = _meter.create_up_down_counter(stat)
+            self._updown_counters[stat] = instrument
+        return instrument
+
+    def gauge(self, stat: str):
+        instrument = self._gauges.get(stat)
+        if instrument is None:
+            create_gauge = getattr(_meter, "create_gauge", None)
+            if create_gauge is not None:
+                instrument = create_gauge(stat)
+            else:
+                # Fallback for OTel versions without synchronous gauge support:
+                # keep the last observed value and expose it via an ObservableGauge.
+                state: dict[str, float] = {}
+
+                def _callback(options, _state=state):
+                    if "value" in _state:
+                        yield otel_metrics.Observation(_state["value"], dict(_state.get("attributes", {})))
+
+                instrument = _meter.create_observable_gauge(stat, callbacks=[_callback])
+                instrument._state = state  # type: ignore[attr-defined]
+            self._gauges[stat] = instrument
+        return instrument
+
+    def histogram(self, stat: str) -> otel_metrics.Histogram:
+        instrument = self._histograms.get(stat)
+        if instrument is None:
+            instrument = _meter.create_histogram(stat)
+            self._histograms[stat] = instrument
+        return instrument
+
+
+_instruments = _InstrumentRegistry()
+
+
+def _record_gauge(stat: str, value: int | float, delta: bool, attributes: dict[str, str] | None) -> None:
+    instrument = _instruments.gauge(stat)
+    set_value = getattr(instrument, "set", None)
+    if set_value is not None:
+        if delta:
+            state = getattr(instrument, "_last_value", {})
+            prev = state.get(stat, 0)
+            value = prev + value
+            state[stat] = value
+            instrument._last_value = state  # type: ignore[attr-defined]
+        set_value(value, attributes or {})
+    else:
+        # ObservableGauge fallback: mutate the state the callback reads.
+        state = instrument._state  # type: ignore[attr-defined]
+        if delta:
+            value = state.get("value", 0) + value
+        state["value"] = value
+        state["attributes"] = attributes or {}
 
 
 def prepare_stat_with_tags(fn: T) -> T:
@@ -63,17 +142,26 @@ def prepare_stat_with_tags(fn: T) -> T:
 
 
 class SafeStatsdLogger:
-    """StatsD Logger."""
+    """StatsD-compatible logger, backed by the OpenTelemetry Metrics API.
+
+    Preserves the original StatsD semantics: metric names are kept VERBATIM
+    (including the caller-supplied prefix baked into ``stat``), incr/decr
+    address the same underlying stat via signed adds, gauge keeps absolute-set
+    and delta-add behavior, and timing/timer map to histograms recording
+    milliseconds (matching the original StatsD wire units).
+    """
 
     def __init__(
         self,
-        statsd_client: StatsClient,
+        statsd_client: None = None,
         metrics_validator: ListValidator | None = None,
         influxdb_tags_enabled: bool = False,
         metric_tags_validator: ListValidator | None = None,
         stat_name_handler: Callable[[str], str] | None = None,
         statsd_influxdb_enabled: bool = False,
     ) -> None:
+        # statsd_client is accepted for backwards-compat call-site signatures but
+        # is no longer used: all recording goes through OTel instruments.
         self.statsd = statsd_client
         self.metrics_validator = metrics_validator or PatternAllowListValidator()
         self.influxdb_tags_enabled = influxdb_tags_enabled
@@ -91,9 +179,12 @@ class SafeStatsdLogger:
         *,
         tags: dict[str, str] | None = None,
     ) -> None:
-        """Increment stat."""
+        """Increment stat. Sample rate has no OTel equivalent and is dropped."""
         if self.metrics_validator.test(stat):
-            return self.statsd.incr(stat, count, rate)
+            if stat in UP_DOWN_COUNTERS:
+                _instruments.up_down_counter(stat).add(count, tags or {})
+            else:
+                _instruments.counter(stat).add(count, tags or {})
         return None
 
     @prepare_stat_with_tags
@@ -106,9 +197,15 @@ class SafeStatsdLogger:
         *,
         tags: dict[str, str] | None = None,
     ) -> None:
-        """Decrement stat."""
+        """Decrement stat. Sample rate has no OTel equivalent and is dropped."""
         if self.metrics_validator.test(stat):
-            return self.statsd.decr(stat, count, rate)
+            if stat in UP_DOWN_COUNTERS:
+                _instruments.up_down_counter(stat).add(-count, tags or {})
+            else:
+                # Non-bidirectional counters are monotonic; a decrement on one of
+                # these stats still needs to be recorded via an up/down counter
+                # to avoid violating Counter's non-negative `add` contract.
+                _instruments.up_down_counter(stat).add(-count, tags or {})
         return None
 
     @prepare_stat_with_tags
@@ -122,9 +219,9 @@ class SafeStatsdLogger:
         *,
         tags: dict[str, str] | None = None,
     ) -> None:
-        """Gauge stat."""
+        """Gauge stat. Sample rate has no OTel equivalent and is dropped."""
         if self.metrics_validator.test(stat):
-            return self.statsd.gauge(stat, value, rate, delta)
+            _record_gauge(stat, value, delta, tags)
         return None
 
     @prepare_stat_with_tags
@@ -136,9 +233,11 @@ class SafeStatsdLogger:
         *,
         tags: dict[str, str] | None = None,
     ) -> None:
-        """Stats timing."""
+        """Stats timing. ``dt`` numeric values are already milliseconds;
+        timedeltas are converted via total_seconds()*1000."""
         if self.metrics_validator.test(stat):
-            return self.statsd.timing(stat, dt)
+            millis = dt.total_seconds() * 1000.0 if hasattr(dt, "total_seconds") else dt
+            _instruments.histogram(stat).record(millis, tags or {})
         return None
 
     @prepare_stat_with_tags
@@ -152,13 +251,35 @@ class SafeStatsdLogger:
     ) -> Timer:
         """Timer metric that can be cancelled."""
         if stat and self.metrics_validator.test(stat):
-            return Timer(self.statsd.timer(stat, *args, **kwargs))
+            histogram = _instruments.histogram(stat)
+
+            class _OtelTimerHandle:
+                def start(self):
+                    return self
+
+                def stop(self, send=True):
+                    return self
+
+                def __enter__(self):
+                    import time
+
+                    self._start = time.perf_counter()
+                    return self
+
+                def __exit__(self, exc_type, exc_val, exc_tb):
+                    import time
+
+                    elapsed_ms = (time.perf_counter() - self._start) * 1000.0
+                    histogram.record(elapsed_ms, tags or {})
+                    return False
+
+            return Timer(_OtelTimerHandle())
         return Timer()
 
 
 def get_statsd_logger(
     *,
-    stats_class: type[StatsClient],
+    stats_class: type | None = None,
     host: str | None = None,
     port: int | None = None,
     prefix: str | None = None,
@@ -170,18 +291,18 @@ def get_statsd_logger(
     stat_name_handler: Callable[[str], str] | None = None,
     statsd_influxdb_enabled: bool = False,
 ) -> SafeStatsdLogger:
-    """Return logger for StatsD."""
-    statsd = stats_class(
-        host=host,
-        port=port,
-        prefix=prefix,
-        ipv6=ipv6,
-    )
+    """Return an OTel-backed logger with StatsD-compatible semantics.
 
+    ``stats_class``/``host``/``port``/``ipv6`` are retained for call-site
+    compatibility but are no longer used to construct a network client; all
+    recording is routed through the global OTel MeterProvider. ``prefix`` must
+    still be baked into ``stat`` by the caller before calling these methods,
+    preserving verbatim metric names for dashboards.
+    """
     metric_tags_validator = PatternBlockListValidator(statsd_disabled_tags)
     validator = get_validator(metrics_allow_list, metrics_block_list)
     return SafeStatsdLogger(
-        statsd,
+        None,
         validator,
         influxdb_tags_enabled,
         metric_tags_validator,

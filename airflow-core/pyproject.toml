@@ -201,11 +201,8 @@ dependencies = [
 "otel" = [
     "opentelemetry-exporter-prometheus>=0.47b0",
 ]
-"statsd" = [
-    "statsd>=3.3.0",
-]
 "all" = [
-    "apache-airflow-core[graphviz,gunicorn,kerberos,otel,statsd]"
+    "apache-airflow-core[graphviz,gunicorn,kerberos,otel]"
 ]
 
 [project.scripts]

@@ -92,9 +92,6 @@ apache-airflow = "airflow.__main__:main"
 "otel" = [
     "apache-airflow-core[otel]"
 ]
-"statsd" = [
-    "apache-airflow-core[statsd]"
-]
 "all-task-sdk" = [
     "apache-airflow-task-sdk[all]"
 ]
@@ -411,7 +408,7 @@ apache-airflow = "airflow.__main__:main"
     "apache-airflow-providers-zendesk>=4.9.0"
 ]
 "all" = [
-    "apache-airflow[aiobotocore,amazon-aws-auth,apache-atlas,apache-webhdfs,async,cloudpickle,github-enterprise,google-auth,graphviz,gunicorn,kerberos,ldap,memray,otel,pandas,polars,rabbitmq,s3fs,sentry,statsd,uv]",
+    "apache-airflow[aiobotocore,amazon-aws-auth,apache-atlas,apache-webhdfs,async,cloudpickle,github-enterprise,google-auth,graphviz,gunicorn,kerberos,ldap,memray,otel,pandas,polars,rabbitmq,s3fs,sentry,uv]",
     "apache-airflow-core[all]",
     "apache-airflow-providers-airbyte>=5.0.0",
     "apache-airflow-providers-akeyless>=0.1.0",
