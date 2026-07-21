@@ -34,7 +34,9 @@ from .validators import (
 )
 
 if TYPE_CHECKING:
-    from .protocols import DeltaType
+    from statsd import StatsClient
+
+    from .protocols import DeltaType, Timer
     from .validators import ListValidator
 
 T = TypeVar("T", bound=Callable)
