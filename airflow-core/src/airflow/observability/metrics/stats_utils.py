@@ -24,6 +24,10 @@ from airflow.configuration import conf
 
 
 def get_stats_factory() -> Callable:
+    if conf.getboolean("metrics", "statsd_datadog_enabled"):
+        from airflow.observability.metrics import datadog_logger
+
+        return datadog_logger.get_dogstatsd_logger
     if conf.getboolean("metrics", "statsd_on"):
         from airflow.observability.metrics import statsd_logger
 

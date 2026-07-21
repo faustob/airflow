@@ -38,7 +38,10 @@ dependencies = [
 "statsd" = [
     "statsd>=3.3.0",
 ]
-"all" = ["apache-airflow-shared-observability[otel,statsd]"]
+"datadog" = [
+    "datadog>=0.50.0",
+]
+"all" = ["apache-airflow-shared-observability[otel,statsd,datadog]"]
 
 [dependency-groups]
 dev = [

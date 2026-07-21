@@ -105,7 +105,10 @@ dependencies = [
 "statsd" = [
     "statsd>=3.3.0",
 ]
-"all" = ["apache-airflow-task-sdk[sentry,otel,statsd]"]
+"datadog" = [
+    "datadog>=0.50.0",
+]
+"all" = ["apache-airflow-task-sdk[sentry,otel,statsd,datadog]"]
 
 [project.urls]
 "Bug Tracker" = "https://github.com/apache/airflow/issues"
