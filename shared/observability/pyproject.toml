@@ -35,10 +35,7 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.27.0",
     "opentelemetry-proto<9999,>=1.27.0",
 ]
-"statsd" = [
-    "statsd>=3.3.0",
-]
-"all" = ["apache-airflow-shared-observability[otel,statsd]"]
+"all" = ["apache-airflow-shared-observability[otel]"]
 
 [dependency-groups]
 dev = [
