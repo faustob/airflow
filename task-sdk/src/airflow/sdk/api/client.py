@@ -232,9 +232,11 @@ def _log_and_trace_retry(retry_state) -> None:
     span = trace.get_current_span()
     if span.is_recording():
         exc = retry_state.outcome.exception() if retry_state.outcome else None
-        span.add_event(
+        # Replaces span.add_event("http.retry", attributes={...}); span context is still active here,
+        # so the stdlib log record is correlated via the OTel LoggingHandler bridge.
+        logging.getLogger(__name__).info(
             "http.retry",
-            attributes={
+            extra={
                 "attempt_number": retry_state.attempt_number,
                 "error": str(exc) if exc else "",
             },
